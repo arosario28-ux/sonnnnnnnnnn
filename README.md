@@ -134,7 +134,7 @@ have access to your Supabase project to create one for you). To activate it:
    email"), open the game and click **Sign In → Sign Up**.
 2. Create an account with **exactly** these credentials:
    - Email: `dev@rocketrush.game`
-   - Password: `GooseDev2026!`
+   - Password: nope
 3. From then on, whenever you log in with that email, the game automatically
    grants **every single item** (all car paints, wheels, boost colors, and
    goal celebrations, Common through Mythic) and equips the flashiest set
