@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rocket Rush</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="gameWrap">
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    <div id="topBar" class="hidden">
+      <div class="scoreBox">
+        <div class="scoreTeam blue" id="scoreBlue">0</div>
+        <div class="scoreDash">–</div>
+        <div class="scoreTeam red" id="scoreRed">0</div>
+      </div>
+      <div class="timerBox" id="timerBox">2:00</div>
+      <div class="timerBox camBox" id="camBox"><span id="camBoxLabel">CAM: CAR</span> &nbsp;<span class="camKey">C</span></div>
+    </div>
+
+    <div id="boostBars" class="hidden">
+      <div class="boostWrap p1">
+        <div class="boostLabel" id="p1Label">BOOST — P1</div>
+        <div class="boostTrack"><div class="boostFill p1" id="boostP1" style="width:100%"></div></div>
+      </div>
+      <div class="boostWrap p2 hidden" id="boostP2Wrap">
+        <div class="boostLabel" id="p2Label">BOOST — P2</div>
+        <div class="boostTrack"><div class="boostFill p2" id="boostP2" style="width:100%"></div></div>
+      </div>
+    </div>
+
+    <div id="centerMsg">
+      <div id="countdownNum" class="hidden"></div>
+      <div id="goalMsg" class="hidden"></div>
+    </div>
+  </div>
+
+  <!-- MAIN MENU -->
+  <div class="overlay" id="menuMain">
+    <div class="menuCard">
+      <div class="logo">
+        <div class="word1">ROCKET</div>
+        <div class="word2">RUSH</div>
+        <div class="tag">Arcade Car Soccer</div>
+      </div>
+      <div class="menuBtns">
+        <button class="btn primary" id="btnPlay">Play</button>
+        <button class="btn" id="btn2p">2 Player</button>
+        <button class="btn" id="btnOnline">Online Match</button>
+        <button class="btn ghost" id="btnGarage">Garage</button>
+        <button class="btn ghost" id="btnHow">How To Play</button>
+        <button class="btn ghost" id="btnSettings">Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HOW TO PLAY -->
+  <div class="overlay hidden" id="menuHow">
+    <div class="panel">
+      <h2>How To Play</h2>
+      <p style="color:var(--text-dim); margin-top:-8px;">Knock the ball into the opponent's goal. Ball hits harder the faster you're going. Grab boost pads to fill your tank. Beat the Hard AI in Single Player to earn a drop — open it for a random car paint, wheel color, boost color, or goal celebration (Common through Mythic), then equip your favorites in the Garage from the main menu.</p>
+      <h3>Player 1</h3>
+      <div class="row"><span>Accelerate / Reverse</span><span class="keys"><span class="key">W</span><span class="key">S</span></span></div>
+      <div class="row"><span>Steer</span><span class="keys"><span class="key">A</span><span class="key">D</span></span></div>
+      <div class="row"><span>Jump / Double Jump</span><span class="keys"><span class="key">Space</span></span></div>
+      <div class="row"><span>Boost</span><span class="keys"><span class="key">Shift</span></span></div>
+      <div class="row"><span>Reset Car</span><span class="keys"><span class="key">R</span></span></div>
+      <div class="row"><span>Toggle Camera — You / Ball (Single Player)</span><span class="keys"><span class="key">C</span></span></div>
+      <h3>Player 2 (2 Player mode)</h3>
+      <div class="row"><span>Move</span><span class="keys"><span class="key">↑</span><span class="key">↓</span><span class="key">←</span><span class="key">→</span></span></div>
+      <div class="row"><span>Jump / Double Jump</span><span class="keys"><span class="key">-</span></span></div>
+      <div class="row"><span>Boost</span><span class="keys"><span class="key">Right Shift</span></span></div>
+      <h3>Flip</h3>
+      <p style="color:var(--text-dim); margin:0 0 4px 0;">While airborne, tap Jump a second time while holding a direction to flip that way for a small burst of speed.</p>
+      <h3>Online Match</h3>
+      <p style="color:var(--text-dim); margin:0;">Sign in, then hit Online Match to be paired with another signed-in player. You always drive with the Player 1 controls (WASD, Space, Shift) — whichever side of the field you're placed on.</p>
+      <div class="closeRow"><button class="btn small" id="closeHow">Back</button></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="overlay hidden" id="menuSettings">
+    <div class="panel">
+      <h2>Settings</h2>
+      <h3>AI Difficulty (Single Player)</h3>
+      <div class="diffRow">
+        <div class="diffBtn" data-diff="easy">Easy</div>
+        <div class="diffBtn active" data-diff="medium">Medium</div>
+        <div class="diffBtn" data-diff="hard">Hard</div>
+      </div>
+      <h3>Sound</h3>
+      <div class="diffRow">
+        <div class="diffBtn active" data-snd="on">Sound On</div>
+        <div class="diffBtn" data-snd="off">Sound Off</div>
+      </div>
+      <div class="closeRow"><button class="btn small" id="closeSettings">Back</button></div>
+    </div>
+  </div>
+
+  <!-- MATCH OVER -->
+  <div class="overlay hidden" id="menuOver">
+    <div class="menuCard">
+      <div id="matchOver">
+        <div class="title" id="overTitle">MATCH OVER</div>
+        <div class="sub" id="overSub">Blue 3 – 2 Red</div>
+        <button class="btn dropCta hidden" id="btnOpenDrop">🎁 Open Your Drop</button>
+        <div class="btnrow">
+          <button class="btn primary" id="btnRematch">Rematch</button>
+          <button class="btn ghost" id="btnMainMenu">Main Menu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GARAGE -->
+  <div class="overlay hidden" id="menuGarage">
+    <div class="panel garagePanel">
+      <h2>Garage</h2>
+      <div class="garagePreviewWrap"><canvas id="garagePreview" width="320" height="150"></canvas></div>
+      <div class="garageTabs">
+        <div class="garageTab active" data-cat="paint">Paint</div>
+        <div class="garageTab" data-cat="wheel">Wheels</div>
+        <div class="garageTab" data-cat="boost">Boost</div>
+        <div class="garageTab" data-cat="celebration">Celebration</div>
+      </div>
+      <div class="garageGrid" id="garageGrid"></div>
+      <div class="closeRow"><button class="btn small" id="closeGarage">Back</button></div>
+    </div>
+  </div>
+
+  <!-- DROP OPENING -->
+  <div class="overlay hidden" id="menuDrop">
+    <div class="dropStage">
+      <div class="dropTitle" id="dropTitle">You earned a drop!</div>
+
+      <div class="dropCrateWrap" id="dropCrateWrap">
+        <div class="dropCrate" id="dropCrateBtn">
+          <div class="crateGlow"></div>
+          <div class="crateIcon">◆</div>
+        </div>
+        <div class="crateLabel">Tap to open</div>
+      </div>
+
+      <div class="reelViewport hidden" id="reelViewport">
+        <div class="reelMarker"></div>
+        <div class="reelStrip" id="reelStrip"></div>
+      </div>
+
+      <div class="dropResult hidden" id="dropResult">
+        <div class="resultGlow" id="resultGlow"></div>
+        <div class="resultRarity" id="resultRarity">RARE</div>
+        <div class="resultName" id="resultName">Item Name</div>
+        <div class="resultCat" id="resultCat">Car Paint</div>
+        <button class="btn primary" id="btnDropContinue">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dropFlash" id="dropFlash"></div>
+
+  <!-- ACCOUNT CHIP (always visible) -->
+  <div class="accountChip" id="accountChip">
+    <span id="accountChipText">Not signed in</span>
+    <button class="btn small" id="btnAccountAction">Sign In</button>
+  </div>
+
+  <!-- LOGIN -->
+  <div class="overlay hidden" id="menuLogin">
+    <div class="panel loginPanel">
+      <h2>Sign In</h2>
+      <p style="color:var(--text-dim);margin-top:-8px;">Sign in to save your drops to the cloud and play online matches. Local single/2-player still work without an account.</p>
+      <input type="text" id="loginName" placeholder="Display name (for sign up)" class="loginInput" />
+      <input type="email" id="loginEmail" placeholder="Email" class="loginInput" />
+      <input type="password" id="loginPass" placeholder="Password" class="loginInput" />
+      <div class="loginError hidden" id="loginError"></div>
+      <div class="loginBtnRow">
+        <button class="btn primary" id="btnLoginSubmit">Log In</button>
+        <button class="btn" id="btnSignupSubmit">Sign Up</button>
+      </div>
+      <button class="btn ghost" id="btnGuestPlay">Continue as Guest</button>
+      <div class="closeRow"><button class="btn small" id="closeLogin">Back</button></div>
+    </div>
+  </div>
+
+  <!-- ONLINE LOBBY -->
+  <div class="overlay hidden" id="menuLobby">
+    <div class="menuCard">
+      <div class="logo" style="margin-bottom:0;">
+        <div class="word1" style="font-size:32px;">FINDING</div>
+        <div class="word2" style="font-size:32px;">MATCH</div>
+      </div>
+      <div class="lobbySpinner"></div>
+      <div class="lobbyStatus" id="lobbyStatus">Searching for an opponent…</div>
+      <button class="btn ghost" id="btnCancelLobby">Cancel</button>
+    </div>
+  </div>
+
+  <!-- GENERIC NOTICE -->
+  <div class="overlay hidden" id="menuNotice">
+    <div class="panel" style="text-align:center;">
+      <h2 id="noticeTitle">Notice</h2>
+      <p id="noticeBody" style="color:var(--text-dim);"></p>
+      <div class="closeRow" style="justify-content:center;"><button class="btn primary" id="noticeOk">OK</button></div>
+    </div>
+  </div>
+
+  <div id="fpsNote"></div>
+</div>
+
+
+<!-- Supabase (UMD build -- simplest to use from a plain <script> tag, no bundler needed).
+     If you haven't set up a Supabase project yet, this loads harmlessly and the game
+     just runs in local-only mode (see supabase-config.js). -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
