@@ -69,7 +69,7 @@ function swatchCss(item) {
 }
 
 const $ = (sel) => document.querySelector(sel);
-const DEV_EMAILS = ['dev@rocketrush.game', 'cburdick28@brewstermadrid.com'];
+const DEV_EMAILS = ['dev@rocketrush.app'];
 const sb = window.sb || null;
 export const cloudReady = !!sb;
 export const supabaseClient = sb;
