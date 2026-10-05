@@ -61,7 +61,7 @@ export function arenaDist(p, n) {
   const ax = Math.abs(p.x), az = Math.abs(p.z), y = p.y;
   const sx = p.x < 0 ? -1 : 1, sz = p.z < 0 ? -1 : 1;
 
-  if (ax < F.GW && y < F.GH && az > F.HZ - 400) {
+  if (ax <= F.GW && y <= F.GH && az > F.HZ - 400) {
     // In or in front of a goal mouth: the back wall has a hole here. The nearest surfaces are
     // the floor, the goal's side walls and roof (or their front edges, the posts and crossbar,
     // while still out on the field) and the back of the net.

@@ -299,8 +299,9 @@ function buildStadium(group) {
       );
     }
   };
-  tier(shell, 420, 0, 420, 260, 800);            // wall in front of the first row
-  tier(seats, 420, 260, 2100, 1250, 1700);        // lower tier
+  // the stands start behind the back of the goals (F.GD deep), so nothing cuts through a net
+  tier(shell, 960, 0, 960, 260, 800);            // wall in front of the first row
+  tier(seats, 960, 260, 2100, 1250, 1700);        // lower tier
   tier(shell, 2100, 1250, 2100, 1560, 800);
   tier(seats, 2100, 1560, 3900, 2900, 1700);      // upper tier
   tier(shell, 3900, 2900, 3900, 3600, 800);

@@ -471,7 +471,7 @@ function driveRemote(car, dt) {
 
 // ---------------------------------------------------------------- one physics tick
 let lastBeep = -1;
-const world = { ball: G.ball, cars: G.cars, prediction: G.prediction, pads: G.pads, kickoff: false, frozen: false };
+const world = { ball: G.ball, cars: G.cars, prediction: G.prediction, pads: G.pads, kickoff: false, frozen: false, age: 0 };
 
 function tick(dt) {
   const { ball, cars } = G;
@@ -493,7 +493,7 @@ function tick(dt) {
     G.predictAt = G.time + 0.1;
     predictBall(ball, G.prediction, 100);
   }
-  world.cars = cars; world.kickoff = !G.kickoffTouched && G.state !== 'goal'; world.frozen = frozen;
+  world.cars = cars; world.kickoff = !G.kickoffTouched && G.state !== 'goal'; world.frozen = frozen; world.age = G.time - G.predictAt + 0.1;
 
   if (!frozen) {
     for (const bot of G.bots) bot.update(dt, world);
