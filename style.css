@@ -365,3 +365,4 @@
   .lobbyPlayers span{ background:rgba(15,22,34,.9); border:1px solid var(--line); border-radius:8px; padding:6px 14px; font-weight:700; letter-spacing:1px; }
   .lobbyPlayers span.me{ border-color:var(--accent); }
   @media (max-width:700px){ .sbTeam{ min-width:90px; } .sbName{ display:none; } .boostGauge{ transform:scale(.75); transform-origin:bottom right; } }
+  .padFocus{ outline:2px solid var(--accent); outline-offset:3px; box-shadow:0 0 18px rgba(255,207,77,.45); }

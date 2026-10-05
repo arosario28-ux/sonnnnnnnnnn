@@ -275,7 +275,7 @@ export class Car {
       // steering turns the car, and the tyres drag the velocity round with it
       const steer = clamp(inp.steer, -1, 1);
       this.steerAngle = lerp(this.steerAngle, steer * 0.5, Math.min(1, dt * 14));
-      const yawRate = -steer * curve(TURN_CURVATURE, Math.abs(vf)) * vf * (inp.slide ? 1.7 : 1);
+      const yawRate = -steer * curve(TURN_CURVATURE, Math.abs(vf)) * vf * (inp.slide ? 1.6 : 0.88);
       const dYaw = yawRate * dt;
       tq.setFromAxisAngle(n, dYaw);
       quat.premultiply(tq).normalize();

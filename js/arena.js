@@ -322,31 +322,68 @@ function buildStadium(group) {
   group.add(ground);
 }
 
+// Boost pads. Small ones are a glowing hexagon set in the floor; the six big ones carry a
+// floating orb in a column of light, which shrinks away when taken and grows back as it recharges.
+const PAD_COLOR = [2.3, 1.25, 0.18];
 function buildPads(group) {
   const pads = [];
-  const discGeo = new THREE.CylinderGeometry(44, 50, 5, 24), ringGeo = new THREE.RingGeometry(52, 68, 32);
-  const bigBase = new THREE.CylinderGeometry(120, 150, 14, 32), orbGeo = new THREE.SphereGeometry(52, 24, 16);
-  const baseMat = new THREE.MeshStandardMaterial({ color: 0x2a2f38, metalness: 0.8, roughness: 0.3 });
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x1c2029, metalness: 0.85, roughness: 0.28 });
+  const smallBase = new THREE.CylinderGeometry(60, 68, 5, 6), smallCore = new THREE.CylinderGeometry(42, 42, 3, 6);
+  const bigBase = new THREE.CylinderGeometry(128, 152, 16, 32), bigRing = new THREE.TorusGeometry(104, 7, 10, 48);
+  const orbGeo = new THREE.SphereGeometry(48, 28, 18), hoopGeo = new THREE.TorusGeometry(76, 3.5, 8, 44);
+  const beamGeo = new THREE.CylinderGeometry(40, 72, 340, 24, 1, true), poolGeo = new THREE.PlaneGeometry(1, 1);
+  const glowMat = (opacity) => new THREE.MeshBasicMaterial({ map: GLOW.tex, color: 0xff9a1f, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
   for (const [x, z, big] of PADS) {
     const g = new THREE.Group();
     g.position.set(x, 0, z);
-    const lit = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.7, 0.95, 0.15), toneMapped: false });
+    const lit = new THREE.MeshBasicMaterial({ color: new THREE.Color(...PAD_COLOR), toneMapped: false });
+    const pool = new THREE.Mesh(poolGeo, glowMat(0.7));        // light spilling on the floor
+    pool.rotation.x = -Math.PI / 2; pool.position.y = 6; pool.scale.setScalar(big ? 620 : 260); pool.renderOrder = 1;
+    const p = { big, lit, pool, k: 1 };
     if (big) {
-      const base = new THREE.Mesh(bigBase, baseMat); base.position.y = 7; base.receiveShadow = true;
-      const orb = new THREE.Mesh(orbGeo, lit); orb.position.y = 95;
-      const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW.tex, color: 0xffa020, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-      halo.scale.setScalar(250); halo.position.y = 95; halo.material.opacity = 0.55;
-      g.add(base, orb, halo);
-      pads.push({ big, lit, glow: [orb, halo], orb });
+      const base = new THREE.Mesh(bigBase, baseMat); base.position.y = 8; base.receiveShadow = true;
+      const ring = new THREE.Mesh(bigRing, lit); ring.rotation.x = Math.PI / 2; ring.position.y = 17;
+      p.orbMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(...PAD_COLOR), toneMapped: false });
+      p.orb = new THREE.Mesh(orbGeo, p.orbMat);
+      p.hoops = [new THREE.Mesh(hoopGeo, p.orbMat), new THREE.Mesh(hoopGeo, p.orbMat)];
+      p.beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: 0xff8a1a, transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      p.beam.position.y = 186;
+      p.halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW.tex, color: 0xffa020, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 }));
+      p.halo.scale.setScalar(260);
+      p.float = new THREE.Group();
+      p.float.add(p.orb, ...p.hoops, p.halo);
+      g.add(base, ring, p.beam, p.float, pool);
     } else {
-      const disc = new THREE.Mesh(discGeo, lit); disc.position.y = 3;
-      const ring = new THREE.Mesh(ringGeo, baseMat); ring.rotation.x = -Math.PI / 2; ring.position.y = 1.5;
-      g.add(disc, ring);
-      pads.push({ big, lit, glow: [], disc });
+      const base = new THREE.Mesh(smallBase, baseMat); base.position.y = 2.5; base.receiveShadow = true;
+      const core = new THREE.Mesh(smallCore, lit); core.position.y = 5.5;
+      g.add(base, core, pool);
     }
+    pads.push(p);
     group.add(g);
   }
   return pads;
+}
+
+function updatePads(pads, timers, t, dt) {
+  for (let i = 0; i < pads.length; i++) {
+    const p = pads[i], left = timers ? timers[i] : 0, on = left <= 0;
+    p.k += ((on ? 1 : 0) - p.k) * Math.min(1, dt * 9);
+    const pulse = 1 + Math.sin(t * 4 + i * 1.7) * 0.12;
+    const glow = (0.05 + 0.95 * p.k) * pulse;
+    p.lit.color.setRGB(PAD_COLOR[0] * glow, PAD_COLOR[1] * glow, PAD_COLOR[2] * glow);
+    p.pool.material.opacity = 0.7 * p.k * pulse;
+    if (!p.big) continue;
+    // while recharging, a dim orb grows back so you can see how long is left
+    const charge = on ? 1 : 1 - left / 10;
+    const dim = 0.1 + 0.9 * p.k;
+    p.orbMat.color.setRGB(PAD_COLOR[0] * dim, PAD_COLOR[1] * dim, PAD_COLOR[2] * dim);
+    p.float.position.y = 104 + Math.sin(t * 2.2 + i) * 9;
+    p.float.scale.setScalar(on ? 0.3 + 0.7 * p.k : 0.15 + 0.5 * charge);
+    p.hoops[0].rotation.set(t * 1.6, t * 0.9, 0);
+    p.hoops[1].rotation.set(Math.PI / 2 + t * 1.1, 0, t * 1.9);
+    p.halo.material.opacity = 0.5 * p.k;
+    p.beam.material.opacity = 0.13 * p.k * pulse;
+  }
 }
 
 export function buildArena(scene, loaders) {
@@ -418,16 +455,7 @@ export function buildArena(scene, loaders) {
     // `timers` are the seconds until each pad is back (0 = ready)
     update(dt, timers) {
       t += dt;
-      for (let i = 0; i < pads.length; i++) {
-        const p = pads[i], on = !timers || timers[i] <= 0;
-        if (p.big) {
-          for (const o of p.glow) o.visible = on;
-          p.orb.position.y = 95 + Math.sin(t * 2.2 + i) * 9;
-        } else {
-          const k = on ? 1 : 0.07;
-          p.lit.color.setRGB(1.7 * k, 0.95 * k, 0.15 * k);
-        }
-      }
+      updatePads(pads, timers, t, dt);
     },
   };
 }

@@ -5,7 +5,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { TICK, F, BALL_R, CAR, PADS, PAD_BIG_TIME, PAD_SMALL_TIME, Ball, Car, hitBall, hitCars, collectPads, predictBall, isGoal } from './physics.js';
+import { TICK, F, BALL_R, CAR, PADS, PAD_BIG_TIME, PAD_SMALL_TIME, Ball, Car, hitBall, hitCars, collectPads, predictBall, isGoal, arenaDist } from './physics.js';
 import { buildArena, TEAM_COLORS, TEAM_NAMES } from './arena.js';
 import { loaders, loadModels, CarView, BallView, Particles, carTrail, ballTrail, goalExplosion, demoExplosion } from './visuals.js';
 import { Bot } from './ai.js';
@@ -73,7 +73,7 @@ function applyQuality() {
 }
 
 // ---------------------------------------------------------------- cameras
-const CAM_DIST = 290, CAM_HEIGHT = 112, CAM_FOV = 72;
+const CAM_DIST = 290, CAM_HEIGHT = 112, CAM_FOV = 72, CAM_MARGIN = 55;
 function makeRig() {
   return { cam: new THREE.PerspectiveCamera(CAM_FOV, 1, 8, 140000), dir: new THREE.Vector3(0, 0, 1), ballCam: true, shake: 0, fov: CAM_FOV, lift: 0 };
 }
@@ -96,7 +96,7 @@ function updateRig(rig, car, dt) {
     v1.y = 0;
     if (v1.lengthSq() < 0.01) v1.copy(rig.dir); else v1.normalize();
   }
-  rig.dir.lerp(v1, 1 - Math.exp(-(rig.ballCam ? 9 : 5) * dt)).normalize();
+  rig.dir.lerp(v1, 1 - Math.exp(-(rig.ballCam ? 9 : 8) * dt)).normalize();
   rig.lift += (lift - rig.lift) * (1 - Math.exp(-7 * dt));
 
   // behind and above the car; when the ball is high the camera drops and tilts up toward it
@@ -107,6 +107,12 @@ function updateRig(rig, car, dt) {
   cam.position.x = clamp(cam.position.x, -F.HX + 40, F.HX - 40);
   cam.position.z = clamp(cam.position.z, -F.HZ - F.GD + 40, F.HZ + F.GD - 40);
   cam.position.y = clamp(cam.position.y, 22, F.H - 30);
+  // never let the camera through a wall, a curve or the ceiling (this matters on the walls)
+  for (let i = 0; i < 3; i++) {
+    const d = arenaDist(cam.position, v3);
+    if (d >= CAM_MARGIN) break;
+    cam.position.addScaledVector(v3, CAM_MARGIN - d);
+  }
   v2.copy(car.pos).addScaledVector(rig.dir, 420);
   v2.y += 55 + Math.sin(rig.lift) * 520;
   if (rig.shake > 0) {
@@ -128,6 +134,8 @@ const KEYS_SOLO = { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: 
 const KEYS_P2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], jump: ['Minus', 'Numpad0'], boost: ['ShiftRight'], slide: ['Slash', 'ControlRight'], rollL: ['Comma'], rollR: ['Period'] };
 const down = (codes) => codes.some((c) => keys.has(c));
 const steerSmooth = [0, 0];
+const PAD_SPARK = new THREE.Color(2.4, 1.3, 0.2);
+const gamepads = () => (navigator.getGamepads ? [...navigator.getGamepads()] : []).filter((p) => p && p.connected);
 const padPrev = [{}, {}];
 
 function readInput(i, car, dt) {
@@ -141,22 +149,22 @@ function readInput(i, car, dt) {
   if (i === 0 && !split) { boost = boost || mouse[0]; slide = slide || mouse[2]; }
 
   // keyboard steering eases in a little, so a tap is a nudge rather than full lock
-  steerSmooth[i] += (steer - steerSmooth[i]) * Math.min(1, dt * (steer === 0 ? 14 : 9));
+  steerSmooth[i] += (steer - steerSmooth[i]) * Math.min(1, dt * (steer === 0 || steer * steerSmooth[i] < 0 ? 12 : 4.5));
   let steerOut = Math.abs(steerSmooth[i]) < 0.01 ? 0 : steerSmooth[i];
 
-  const pad = (navigator.getGamepads ? navigator.getGamepads() : [])[i];
+  const pad = gamepads()[i];
   if (pad && pad.connected) {
     const dz = (v) => Math.abs(v) < 0.16 ? 0 : (v - Math.sign(v) * 0.16) / 0.84;
     const b = (n) => !!pad.buttons[n] && pad.buttons[n].pressed, val = (n) => pad.buttons[n] ? pad.buttons[n].value : 0;
-    const gx = dz(pad.axes[0] || 0), gy = dz(pad.axes[1] || 0), gt = val(7) - val(6);
+    const gx = dz(pad.axes[0] || 0) + (b(15) ? 1 : 0) - (b(14) ? 1 : 0), gy = dz(pad.axes[1] || 0), gt = val(7) - val(6);
     if (Math.abs(gx) > Math.abs(steer)) { steer = gx; steerOut = gx; }
     if (Math.abs(gt) > Math.abs(throttle)) throttle = gt;
     if (gy !== 0) pitch = gy;
     jump = jump || b(0); boost = boost || b(1); slide = slide || b(2);
     roll += (b(5) ? 1 : 0) - (b(4) ? 1 : 0);
     if (b(3) && !padPrev[i].cam) toggleBallCam(i);
-    if (b(9) && !padPrev[i].start) togglePause();
-    padPrev[i].cam = b(3); padPrev[i].start = b(9);
+
+    padPrev[i].cam = b(3);
   }
 
   inp.throttle = throttle; inp.steer = steerOut; inp.pitch = pitch; inp.yaw = steer; inp.roll = roll;
@@ -527,6 +535,8 @@ function tick(dt) {
     for (const car of cars) {
       if (car.kinematic) continue;
       collectPads(car, G.pads, (i, big, c) => {
+        fx.burst(v1.set(PADS[i][0], big ? 90 : 20, PADS[i][1]), big ? 70 : 20, big ? 800 : 380, 0.55, big ? 40 : 26, PAD_SPARK, -250, 150);
+        if (big) fx.shock(v1, PAD_SPARK, 320, 0.35);
         if (G.locals.includes(c)) { Sound.pad(big); if (G.mode === 'online') online.picks.push({ i, n: ++online.pickSeq, at: performance.now() }); }
       });
     }
@@ -803,6 +813,7 @@ function frame(now) {
   arena.update(dt, G.garage ? null : G.pads);
   fx.update(dt, rigs[0].cam, renderer.domElement.height);
   syncHud();
+  padMenu(now);
   const local = G.locals[0];
   Sound.drive(local ? local.vel.length() : 0, !!local?.boosting && !local.demoed, G.playing && running && G.state !== 'over' && !G.paused);
 
@@ -889,3 +900,35 @@ start().catch((err) => {
 
 // for debugging in the console
 window.RR = { G, online, rigs, renderer, scene, settings };
+
+// ---------------------------------------------------------------- menus with a controller
+// Stick or D-pad moves the highlight, A presses it, B goes back, Start resumes.
+let padFocus = null, padNavAt = 0;
+const padWas = { a: false, b: false, start: false };
+function padMenu(now) {
+  const pad = gamepads()[0];
+  if (!pad) return;
+  const b = (n) => !!pad.buttons[n] && pad.buttons[n].pressed;
+  const menu = MENUS.map($).find((m) => !m.classList.contains('hidden'));
+  if (menu && menu.id !== 'menuLoading') {
+    const items = [...menu.querySelectorAll('.btn, .diffBtn, .garageTab, .itemCard.owned, .dropCrate')].filter((e) => e.offsetParent !== null);
+    if (items.length) {
+      let at = items.indexOf(padFocus);
+      const focus = (i) => {
+        padFocus?.classList.remove('padFocus');
+        padFocus = items[(i + items.length) % items.length];
+        padFocus.classList.add('padFocus');
+        padFocus.scrollIntoView({ block: 'nearest' });
+      };
+      if (at < 0) focus(at = 0);
+      const dir = (pad.axes[1] > 0.55 || b(13) || pad.axes[0] > 0.55 || b(15) ? 1 : 0) - (pad.axes[1] < -0.55 || b(12) || pad.axes[0] < -0.55 || b(14) ? 1 : 0);
+      if (!dir) padNavAt = 0;
+      else if (now >= padNavAt) { padNavAt = now + (padNavAt ? 150 : 320); focus(at + dir); }
+      if (b(0) && !padWas.a) { Sound.init(); Sound.resume(); padFocus.click(); }
+      if (b(1) && !padWas.b) menu.querySelector('[id^="close"], #btnCancelLobby, #btnResume, #noticeOk, #btnMainMenu')?.click();
+    }
+  }
+  if (b(9) && !padWas.start) togglePause();
+  padWas.a = b(0); padWas.b = b(1); padWas.start = b(9);
+}
+window.addEventListener('gamepadconnected', () => { $('#fpsNote').textContent = 'Controller connected'; });
