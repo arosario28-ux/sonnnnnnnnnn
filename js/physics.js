@@ -79,6 +79,20 @@ export function arenaDist(p, n) {
     return d;
   }
 
+  if (az > F.HZ) {
+    // Behind the line of the back wall but not inside the goal: this is solid. Push back the
+    // shortest way out, which is into the goal for something that has come through its side
+    // or roof netting, and onto the pitch for anything else.
+    let pen = az - F.HZ;
+    n.set(0, 0, -sz);
+    const px = ax - F.GW, py = y - F.GH, side = Math.max(px, py);
+    if (side < pen && side < 200 && az < F.HZ + F.GD + 200) {
+      pen = Math.max(side, 0);
+      if (px > py) n.set(-sx, 0, 0); else n.set(0, -1, 0);
+    }
+    return -pen;
+  }
+
   // The main room: an eight-sided footprint, with a curve where the walls meet floor and ceiling.
   let f = ax - F.HX, gx = sx, gz = 0;
   const fz = az - F.HZ; if (fz > f) { f = fz; gx = 0; gz = sz; }

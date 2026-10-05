@@ -75,46 +75,46 @@ function applyQuality() {
 // ---------------------------------------------------------------- cameras
 const CAM_DIST = 290, CAM_HEIGHT = 112, CAM_FOV = 72, CAM_MARGIN = 55;
 function makeRig() {
-  return { cam: new THREE.PerspectiveCamera(CAM_FOV, 1, 8, 140000), dir: new THREE.Vector3(0, 0, 1), ballCam: true, shake: 0, fov: CAM_FOV, lift: 0 };
+  return { cam: new THREE.PerspectiveCamera(CAM_FOV, 1, 8, 140000), dir: new THREE.Vector3(0, 0, 1), ballCam: true, shake: 0, fov: CAM_FOV, up: new THREE.Vector3(0, 1, 0) };
 }
 const rigs = [makeRig(), makeRig()];
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
 
 function updateRig(rig, car, dt) {
   const ball = G.ball;
-  // which way the camera faces: toward the ball, or where the car is going
-  let lift = 0;
+  const onWall = car.onGround && car.normal.y < 0.75;
+  // which way the camera faces: straight at the ball (up and down too), or where the car is going
   if (rig.ballCam && !G.ballHidden) {
     v1.subVectors(ball.pos, car.pos);
-    const flat = Math.hypot(v1.x, v1.z);
-    lift = clamp(Math.atan2(v1.y, flat + 200), -0.25, 1.0);
-    if (flat > 30) { v1.y = 0; v1.normalize(); } else v1.copy(rig.dir);
+    if (v1.lengthSq() > 900) v1.normalize(); else v1.copy(rig.dir);
+    v1.y = clamp(v1.y, -0.8, 0.8);
   } else {
-    if (car.onGround && car.normal.y > 0.6) v1.copy(car.fwd);
-    else if (car.vel.lengthSq() > 250 * 250) v1.copy(car.vel);
+    if (car.onGround) v1.copy(car.fwd);
+    else if (car.vel.lengthSq() > 250 * 250) v1.copy(car.vel).normalize();
     else v1.copy(rig.dir);
-    v1.y = 0;
-    if (v1.lengthSq() < 0.01) v1.copy(rig.dir); else v1.normalize();
+    if (!onWall) v1.y = 0;
   }
-  rig.dir.lerp(v1, 1 - Math.exp(-(rig.ballCam ? 9 : 8) * dt)).normalize();
-  rig.lift += (lift - rig.lift) * (1 - Math.exp(-7 * dt));
+  if (v1.lengthSq() < 0.01) v1.copy(rig.dir);
+  rig.dir.lerp(v1.normalize(), 1 - Math.exp(-(rig.ballCam ? 9 : 8) * dt)).normalize();
+  // "above the car" leans away from a wall the car is on, so the camera swings out into the
+  // arena instead of being squeezed against the wall
+  v1.set(0, 1, 0);
+  if (onWall) v1.lerp(car.normal, 0.8).normalize();
+  rig.up.lerp(v1, 1 - Math.exp(-5 * dt)).normalize();
 
-  // behind and above the car; when the ball is high the camera drops and tilts up toward it
-  const back = CAM_DIST * Math.cos(rig.lift * 0.5), up = CAM_HEIGHT - Math.sin(rig.lift) * 150;
   const cam = rig.cam;
-  cam.position.copy(car.pos).addScaledVector(rig.dir, -back);
-  cam.position.y += up;
+  cam.position.copy(car.pos).addScaledVector(rig.dir, -CAM_DIST).addScaledVector(rig.up, CAM_HEIGHT);
   cam.position.x = clamp(cam.position.x, -F.HX + 40, F.HX - 40);
   cam.position.z = clamp(cam.position.z, -F.HZ - F.GD + 40, F.HZ + F.GD - 40);
   cam.position.y = clamp(cam.position.y, 22, F.H - 30);
-  // never let the camera through a wall, a curve or the ceiling (this matters on the walls)
+  // never let the camera through a wall, a curve or the ceiling
   for (let i = 0; i < 3; i++) {
     const d = arenaDist(cam.position, v3);
     if (d >= CAM_MARGIN) break;
     cam.position.addScaledVector(v3, CAM_MARGIN - d);
   }
-  v2.copy(car.pos).addScaledVector(rig.dir, 420);
-  v2.y += 55 + Math.sin(rig.lift) * 520;
+  v2.copy(car.pos).addScaledVector(rig.dir, 600).addScaledVector(rig.up, 45);
+  if (rig.ballCam) cam.up.set(0, 1, 0); else cam.up.copy(rig.up);
   if (rig.shake > 0) {
     rig.shake = Math.max(0, rig.shake - dt * 1.6);
     const s = rig.shake * rig.shake * 34;
@@ -263,7 +263,7 @@ function setupMatch(mode) {
     G.names = mine === 0 ? [myName, online.opponent.name] : [online.opponent.name, myName];
   }
   rigs[0].ballCam = rigs[1].ballCam = true;
-  for (const r of rigs) { r.shake = 0; r.lift = 0; }
+  for (const r of rigs) { r.shake = 0; r.up.set(0, 1, 0); r.cam.up.set(0, 1, 0); }
   G.locals.forEach((car, i) => rigs[i].dir.set(0, 0, car.team === 0 ? 1 : -1));
   showOnly(null);
   updateHudLayout();
@@ -877,6 +877,7 @@ async function start() {
   }
   if (query.get('garage')) {
     $('#btnGarage').click();
+    if (query.get('body')) garageView.setLook({ ...currentLook(), body: query.get('body') });
   }
   if (query.get('sim')) {
     // fast-forward: run this many seconds of the match before the first frame is drawn

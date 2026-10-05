@@ -13,8 +13,18 @@ export const loaders = {
   hdr: new RGBELoader(),
 };
 
-const CAR_FILE = 'assets/cars/gtr.glb';
-const CAR_SCALE = 29;   // the model is in metres, 4.5 long
+// Car bodies. `paint` and `rims` name the materials in each file that get recoloured. Every file
+// shares one layout: nose toward +z, tyres on y = 0, wheel nodes wheel_fl/fr/rl/rr.
+export const CAR_MODELS = {
+  gtr: { paint: ['r35_paint'], rims: ['r35_wheel_05a'] },
+  evo: { paint: ['material_0'], rims: ['material_18'] },
+  m4: { paint: ['Material_692'], rims: ['Material_753'] },
+  c8: { paint: ['Body_Color'], rims: ['material'] },
+  mclaren: { paint: ['Primary_Paint'], rims: ['Wheel_1A'] },
+  huracan: { paint: ['Huracan_EVO_Paint'], rims: ['Gloss_Black', 'Chrome'] },
+  veyron: { paint: ['secondary'], rims: ['wheel_rf.1'] },
+};
+const CAR_LENGTH = 132;   // every body is scaled to this many units long
 const PAINT_MATS = ['r35_paint'], RIM_MATS = ['r35_wheel_05a'];
 const WHEEL_NAMES = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'];
 
@@ -36,9 +46,17 @@ function fallbackCar() {
   return g;
 }
 
+const carCache = new Map();
+export function loadCar(id) {
+  if (!carCache.has(id)) {
+    carCache.set(id, loaders.gltf.loadAsync(`assets/cars/${id}.glb`).then((g) => g.scene, (e) => { console.warn(`Car "${id}" failed to load; using a stand-in.`, e); return fallbackCar(); }));
+  }
+  return carCache.get(id);
+}
+
 export async function loadModels() {
   const [car, ball] = await Promise.all([
-    loaders.gltf.loadAsync(CAR_FILE).then((g) => g.scene, (e) => { console.warn('Car model failed to load; using a stand-in.', e); return fallbackCar(); }),
+    loadCar('gtr'),
     loaders.gltf.loadAsync('assets/ball/football.gltf').then((g) => g.scene, (e) => { console.warn('Ball model failed to load; using a stand-in.', e); return null; }),
   ]);
   return { car, ball };
@@ -75,21 +93,9 @@ export class CarView {
     this.team = team;
     this.look = {};
     this.group = new THREE.Group();
-    const model = template.clone(true);
-    model.scale.setScalar(CAR_SCALE);
-    model.position.y = -CAR.REST;
     this.paint = new THREE.MeshPhysicalMaterial({ metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.3 });
-    this.rim = null;
-    this.wheels = [];
-    model.traverse((o) => {
-      if (WHEEL_NAMES.includes(o.name)) { o.rotation.order = 'YXZ'; this.wheels[WHEEL_NAMES.indexOf(o.name)] = o; }
-      if (!o.isMesh) return;
-      o.castShadow = true;
-      if (PAINT_MATS.includes(o.material.name)) { this.paint.map = o.material.map; o.material = this.paint; }
-      else if (RIM_MATS.includes(o.material.name)) { this.rim = this.rim || o.material.clone(); o.material = this.rim; }
-    });
-    this.rimBase = this.rim ? this.rim.color.clone() : null;
-    this.group.add(model);
+    this.bodyId = 'gtr';
+    this.mount(template, CAR_MODELS.gtr);
 
     const team3 = new THREE.Color(TEAM_COLORS[team]);
     this.glow = new THREE.Mesh(
@@ -112,8 +118,43 @@ export class CarView {
     scene.add(this.group);
   }
 
-  // look: { paint, wheel, boost } colours, any of which may be missing
-  setLook(look) { this.look = look || {}; }
+  // Puts a car body on this car. Every model is scaled to the same length and sat on its tyres,
+  // so they all fit the one hitbox.
+  mount(template, def) {
+    if (this.model) this.group.remove(this.model);
+    const model = template.clone(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const s = CAR_LENGTH / (box.max.z - box.min.z);
+    model.scale.setScalar(s);
+    model.position.set(0, -CAR.REST - box.min.y * s, -(box.max.z + box.min.z) / 2 * s);
+    this.rims = [];
+    this.wheels = [];
+    const made = new Map();
+    this.paint.map = null;
+    model.traverse((o) => {
+      if (WHEEL_NAMES.includes(o.name)) { o.rotation.order = 'YXZ'; this.wheels[WHEEL_NAMES.indexOf(o.name)] = o; }
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      const inWheel = WHEEL_NAMES.includes(o.name) || WHEEL_NAMES.includes(o.parent?.name);
+      if (!inWheel && def.paint.includes(o.material.name)) { this.paint.map = o.material.map; o.material = this.paint; }
+      else if (inWheel && def.rims.includes(o.material.name)) {
+        if (!made.has(o.material.uuid)) { const mat = o.material.clone(); made.set(o.material.uuid, mat); this.rims.push({ mat, base: mat.color.clone() }); }
+        o.material = made.get(o.material.uuid);
+      }
+    });
+    this.paint.needsUpdate = true;
+    this.model = model;
+    this.group.add(model);
+  }
+
+  // look: { paint, wheel, boost } colours and { body } car model id, any of which may be missing
+  setLook(look) {
+    this.look = look || {};
+    const id = CAR_MODELS[this.look.body] ? this.look.body : 'gtr';
+    if (id === this.bodyId) return;
+    this.bodyId = id;
+    loadCar(id).then((tpl) => { if (this.bodyId === id && !this.gone) this.mount(tpl, CAR_MODELS[id]); });
+  }
 
   update(car, time, showTag = true) {
     const g = this.group;
@@ -123,7 +164,7 @@ export class CarView {
     g.position.copy(car.pos);
     g.quaternion.copy(car.quat);
     lookColor(this.look.paint, TEAM_COLORS[this.team], time, this.paint.color);
-    if (this.rim) { if (this.look.wheel) lookColor(this.look.wheel, 0, time, this.rim.color); else this.rim.color.copy(this.rimBase); }
+    for (const r of this.rims) { if (this.look.wheel) lookColor(this.look.wheel, 0, time, r.mat.color); else r.mat.color.copy(r.base); }
     lookColor(this.look.boost, this.team === 0 ? '#59c8ff' : '#ffb347', time, this.boostColor);
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
@@ -141,6 +182,7 @@ export class CarView {
   }
 
   dispose() {
+    this.gone = true;
     this.scene.remove(this.group);
     if (this.tag) { this.scene.remove(this.tag); this.tag.material.map.dispose(); this.tag.material.dispose(); }
     this.paint.dispose();

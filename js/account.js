@@ -11,9 +11,16 @@ export const RARITY = {
   legendary: { label: 'Legendary', color: '#ff9d2e', weight: 2.4 },
   mythic: { label: 'Mythic', color: '#ff4d8d', weight: 0.5 },
 };
-const CAT_LABEL = { paint: 'Car Paint', wheel: 'Wheel Color', boost: 'Boost Color', celebration: 'Goal Explosion' };
+const CAT_LABEL = { body: 'Car Body', paint: 'Car Paint', wheel: 'Wheel Color', boost: 'Boost Color', celebration: 'Goal Explosion' };
 
 export const ITEMS = [
+  // car bodies: `model` is the file in assets/cars (the starter GT-R needs no item)
+  { id: 'body_evo', cat: 'body', name: 'Lancer Evo X', rarity: 'common', model: 'evo' },
+  { id: 'body_m4', cat: 'body', name: 'BMW M4', rarity: 'uncommon', model: 'm4' },
+  { id: 'body_c8', cat: 'body', name: 'Corvette C8', rarity: 'rare', model: 'c8' },
+  { id: 'body_mclaren', cat: 'body', name: 'McLaren Spider', rarity: 'epic', model: 'mclaren' },
+  { id: 'body_huracan', cat: 'body', name: 'Huracán EVO', rarity: 'legendary', model: 'huracan' },
+  { id: 'body_veyron', cat: 'body', name: 'Bugatti Veyron', rarity: 'mythic', model: 'veyron' },
   { id: 'paint_slate', cat: 'paint', name: 'Slate Steel', rarity: 'common', color: '#7c8b9c' },
   { id: 'paint_forest', cat: 'paint', name: 'Forest Drift', rarity: 'uncommon', color: '#3f8f5c' },
   { id: 'paint_sunset', cat: 'paint', name: 'Sunset Blaze', rarity: 'rare', color: '#ff8a3d' },
@@ -49,7 +56,7 @@ function rollItem() {
 }
 
 const SAVE_KEY = 'rocketrush_save_v1';
-const NO_EQUIP = { paint: null, wheel: null, boost: null, celebration: null };
+const NO_EQUIP = { body: null, paint: null, wheel: null, boost: null, celebration: null };
 export const inventory = { owned: [], equipped: { ...NO_EQUIP } };
 try {
   const parsed = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
@@ -59,17 +66,18 @@ try {
 // What the equipped items look like on a car: colours (or 'rainbow'), plus the goal explosion id.
 export function currentLook() {
   const color = (cat) => ITEMS.find((i) => i.id === inventory.equipped[cat])?.color || null;
-  return { paint: color('paint'), wheel: color('wheel'), boost: color('boost'), celebration: inventory.equipped.celebration || 'cel_classic' };
+  const body = ITEMS.find((i) => i.id === inventory.equipped.body)?.model || null;
+  return { body, paint: color('paint'), wheel: color('wheel'), boost: color('boost'), celebration: inventory.equipped.celebration || 'cel_classic' };
 }
 
 function swatchCss(item) {
-  if (item.cat === 'celebration') return `background:linear-gradient(135deg, ${RARITY[item.rarity].color}, #0a0e17)`;
+  if (item.cat === 'celebration' || item.cat === 'body') return `background:linear-gradient(135deg, ${RARITY[item.rarity].color}, #0a0e17)`;
   if (item.color === 'rainbow') return 'background:conic-gradient(red,orange,yellow,green,blue,violet,red)';
   return `background:${item.color}`;
 }
 
 const $ = (sel) => document.querySelector(sel);
-const DEV_EMAILS = ['dev@rocketrush.app'];
+const DEV_EMAILS = ['dev@rocketrush.app', 'cburdick28@brewstermadrid.com'];
 const sb = window.sb || null;
 export const cloudReady = !!sb;
 export const supabaseClient = sb;
@@ -94,9 +102,9 @@ function loadCloudInventory(uid, email) {
   sb.from('inventories').select('*').eq('id', uid).maybeSingle().then(({ data: cloud }) => {
     if (DEV_EMAILS.includes(email)) {
       // dev/showcase account: everything unlocked
-      const first = inventory.owned.length < ITEMS.length;
+      const first = !cloud || !Array.isArray(cloud.owned) || !cloud.equipped;
       inventory.owned = ITEMS.map((i) => i.id);
-      if (first) inventory.equipped = { paint: 'paint_prism', wheel: 'wheel_chroma', boost: 'boost_prism', celebration: 'cel_vortex' };
+      inventory.equipped = first ? { body: 'body_veyron', paint: 'paint_prism', wheel: 'wheel_chroma', boost: 'boost_prism', celebration: 'cel_vortex' } : { ...NO_EQUIP, ...cloud.equipped };
       saveInventory();
     } else if (cloud && Array.isArray(cloud.owned)) {
       inventory.owned = cloud.owned;
@@ -119,7 +127,7 @@ function updateAccountChip() {
 }
 
 // ---- garage
-let garageCat = 'paint';
+let garageCat = 'body';
 function equipItem(cat, id) {
   inventory.equipped[cat] = id;
   saveInventory();
@@ -139,7 +147,7 @@ export function renderGarage() {
   };
   const noneId = garageCat === 'celebration' ? 'cel_classic' : null;
   if (garageCat !== 'celebration') {
-    card('owned' + (!inventory.equipped[garageCat] ? ' selected' : ''), '<div class="itemSwatch" style="background:linear-gradient(135deg,#1f7cff,#ff6a1f)"></div><div class="itemName">Team Color</div><div class="itemRarity" style="color:#9aa5b1">Base</div>', () => equipItem(garageCat, null));
+    card('owned' + (!inventory.equipped[garageCat] ? ' selected' : ''), '<div class="itemSwatch" style="background:linear-gradient(135deg,#1f7cff,#ff6a1f)"></div><div class="itemName">' + (garageCat === 'body' ? 'Skyline GT-R' : 'Team Color') + '</div><div class="itemRarity" style="color:#9aa5b1">Base</div>', () => equipItem(garageCat, null));
   }
   for (const item of ITEMS.filter((i) => i.cat === garageCat)) {
     const owned = inventory.owned.includes(item.id) || item.id === noneId;
