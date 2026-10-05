@@ -9,8 +9,8 @@ import { F, BALL_R, PADS, CAR } from './physics.js';
 
 // jump: 0 stays on the ground, 1 jumps for the ball, 2 double jumps for the high ones
 const LEVELS = {
-  easy: { think: 0.25, throttle: 0.75, boost: 0, dodge: 0, jump: 0, error: 230, shadow: false },
-  medium: { think: 0.1, throttle: 1, boost: 0.5, dodge: 0.6, jump: 1, error: 90, shadow: true },
+  easy: { think: 0.25, throttle: 0.75, boost: 0, dodge: 0.2, jump: 0, error: 230, shadow: false },
+  medium: { think: 0.1, throttle: 1, boost: 0.5, dodge: 0.75, jump: 1, error: 90, shadow: true },
   hard: { think: 1 / 30, throttle: 1, boost: 1, dodge: 1, jump: 2, error: 15, shadow: true },
 };
 const GROUND_REACH = 120;                 // a ball lower than this can be hit without jumping
@@ -90,6 +90,7 @@ export class Bot {
     const ballAngle = Math.atan2(tmp.dot(car.left), tmp.dot(car.fwd));
     const ballDist = Math.hypot(tmp.x, tmp.z), ballGap = tmp.length();
     const toward = (tmp.x * this.shot.x + tmp.z * this.shot.z) / (ballDist + 1);   // 1: the ball is straight ahead along the shot
+    const closing = ((car.vel.x - ball.vel.x) * tmp.x + (car.vel.z - ball.vel.z) * tmp.z) / (ballDist + 1);
 
     inp.jump = false; inp.boost = false; inp.slide = false; inp.pitch = 0; inp.yaw = 0; inp.roll = 0;
     inp.steer = clamp(-angle * 2.6, -1, 1);
@@ -103,7 +104,7 @@ export class Bot {
         // jump, let go, then jump again while pushing toward the ball
         if (s.t < 0.06) inp.jump = true;
         else if (s.t < 0.11) inp.jump = false;
-        else if (s.t < 0.18) { inp.jump = true; inp.pitch = -1; inp.steer = clamp(-ballAngle * 2, -1, 1); }
+        else if (s.t < 0.18) { inp.jump = true; inp.pitch = -1; inp.steer = s.straight ? 0 : clamp(-ballAngle * 2, -1, 1); }
         else { this.seq = null; this.cooldown = 1.1; }
       } else if (s.kind === 'double') {
         // two jumps straight up for a high ball
@@ -162,6 +163,12 @@ export class Bot {
     const keen = level.boost >= 1 || this.mode !== 'attack' || world.kickoff || dist > 2200;
     if (level.boost && lined && speed < 2250 && (hurry || world.kickoff) && car.boost > 0 && keen) inp.boost = true;
 
+    // out of boost with a long way to go: flip forward for the speed
+    if (level.dodge >= 0.7 && hurry && Math.abs(angle) < 0.08 && dist > 2200 && speed > 900 && speed < 1900 && car.boost < 3 && this.cooldown <= 0 && !world.kickoff) {
+      this.seq = { t: 0, kind: 'dodge', straight: true };
+      return;
+    }
+
     if (this.cooldown > 0 || this.mode === 'behind' || this.mode === 'retreat') return;
 
     // the ball is coming down to meet it: jump so they arrive together
@@ -176,9 +183,10 @@ export class Bot {
       return;
     }
 
-    // close, pointing at it and behind it: dodge into the ball
-    if (level.dodge && Math.abs(ballAngle) < 0.35 && ball.pos.y < 165 && ballDist < 270 + speed * 0.14 && (toward > 0.45 || world.kickoff)) {
-      if (Math.random() < level.dodge + 0.3) this.seq = { t: 0, kind: 'dodge' };
+    // closing on the ball, pointing at it and behind it: flip into it
+    // (started a quarter of a second out, so the flip lands as the car gets there)
+    if (Math.abs(ballAngle) < 0.45 && ball.pos.y < 190 && closing > 200 && ballDist - 150 < closing * 0.26 && (toward > 0.3 || world.kickoff)) {
+      if (Math.random() < level.dodge) this.seq = { t: 0, kind: 'dodge' };
       else this.cooldown = 0.25;
     }
   }
