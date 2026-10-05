@@ -80,6 +80,14 @@ function makeRig() {
 const rigs = [makeRig(), makeRig()];
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
 
+function keepInside(p) {
+  for (let i = 0; i < 3; i++) {
+    const d = arenaDist(p, v3);
+    if (d >= CAM_MARGIN) break;
+    p.addScaledVector(v3, CAM_MARGIN - d);
+  }
+}
+
 function updateRig(rig, car, dt) {
   const ball = G.ball;
   const onWall = car.onGround && car.normal.y < 0.75;
@@ -107,12 +115,11 @@ function updateRig(rig, car, dt) {
   cam.position.x = clamp(cam.position.x, -F.HX + 40, F.HX - 40);
   cam.position.z = clamp(cam.position.z, -F.HZ - F.GD + 40, F.HZ + F.GD - 40);
   cam.position.y = clamp(cam.position.y, 22, F.H - 30);
-  // never let the camera through a wall, a curve or the ceiling
-  for (let i = 0; i < 3; i++) {
-    const d = arenaDist(cam.position, v3);
-    if (d >= CAM_MARGIN) break;
-    cam.position.addScaledVector(v3, CAM_MARGIN - d);
-  }
+  // never let the camera through a wall, a curve or the ceiling; and if that squeezes it up
+  // against the car (backed into a goal, say), lift it over the roof so the car stays in view
+  keepInside(cam.position);
+  const room = cam.position.distanceTo(car.pos);
+  if (room < 200) { cam.position.addScaledVector(rig.up, (200 - room) * 0.8); keepInside(cam.position); }
   v2.copy(car.pos).addScaledVector(rig.dir, 600).addScaledVector(rig.up, 45);
   if (rig.ballCam) cam.up.set(0, 1, 0); else cam.up.copy(rig.up);
   if (rig.shake > 0) {
@@ -878,6 +885,13 @@ async function start() {
   if (query.get('garage')) {
     $('#btnGarage').click();
     if (query.get('body')) garageView.setLook({ ...currentLook(), body: query.get('body') });
+  }
+  if (query.get('probe')) {
+    // ?probe=x,z,yaw,speed drops your car there, driving flat out, to test collisions
+    const [px, pz, yaw, speed] = query.get('probe').split(',').map(Number), car = G.locals[0];
+    G.state = 'play'; G.ball.pos.set(3000, 93, 0);
+    car.place(px, pz, yaw); car.vel.copy(car.fwd).multiplyScalar(speed); car.boost = 100;
+    for (let i = 0; i < 360; i++) { car.input.throttle = 1; car.input.boost = true; car.input.jump = query.get('hop') ? i % 60 < 12 : false; tick(TICK); if (i % 30 === 0) console.log('RR probe ' + [car.pos.x, car.pos.y, car.pos.z].map(Math.round) + ' v=' + Math.round(car.vel.length()) + ' g=' + car.onGround); }
   }
   if (query.get('sim')) {
     // fast-forward: run this many seconds of the match before the first frame is drawn

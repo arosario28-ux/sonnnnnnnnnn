@@ -21,7 +21,7 @@ const BALL_MAX = 6000, BALL_DRAG = 0.03, BALL_BOUNCE = 0.6, BALL_FRICTION = 0.28
 const BALL_MASS = 30, CAR_MASS = 180;
 
 export const CAR = {
-  HX: 38, HY: 16, HZ: 64,            // hitbox half extents
+  HX: 38, HY: 16, HZ: 67,            // hitbox half extents
   REST: 30,                          // hitbox centre above the surface when on its wheels
   MAX_SPEED: 2300, SUPERSONIC: 2200,
   BOOST_ACCEL: 991.667, BOOST_USE: 33.3, BOOST_START: 33.3,
@@ -49,7 +49,7 @@ export const PAD_BIG_TIME = 10, PAD_SMALL_TIME = 4;
 
 // Kickoff spots for blue: [x, z, yaw]. Red uses the same spots turned half way round.
 export const KICKOFFS = [
-  [-2048, -2560, -Math.PI / 4], [2048, -2560, Math.PI / 4],
+  [-2048, -2560, Math.atan2(2048, 2560)], [2048, -2560, -Math.atan2(2048, 2560)],   // the diagonals face the ball
   [-256, -3840, 0], [256, -3840, 0], [0, -4608, 0],
 ];
 
@@ -85,10 +85,12 @@ export function arenaDist(p, n) {
     // or roof netting, and onto the pitch for anything else.
     let pen = az - F.HZ;
     n.set(0, 0, -sz);
-    const px = ax - F.GW, py = y - F.GH, side = Math.max(px, py);
-    if (side < pen && side < 200 && az < F.HZ + F.GD + 200) {
-      pen = Math.max(side, 0);
-      if (px > py) n.set(-sx, 0, 0); else n.set(0, -1, 0);
+    // the way back into the goal box, which may be diagonal at its back corners
+    const px = Math.max(0, ax - F.GW), py = Math.max(0, y - F.GH), pb = Math.max(0, az - F.HZ - F.GD);
+    const box = Math.hypot(px, py, pb);
+    if (box > 0 && box < pen && box < 260) {
+      pen = box;
+      n.set(-sx * px / box, -py / box, -sz * pb / box);
     }
     return -pen;
   }
