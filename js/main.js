@@ -18,13 +18,18 @@ const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'rocketrush_settings_v2';
-const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'high', sound: 'on', name: '' };
+const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'auto', sound: 'on', name: '', autoLevel: 1 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (e) { /* defaults */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ } };
+// Graphics used to default to High, which laptops and Macs can't run smoothly. Move everyone
+// (including players who already have "high" saved) onto Auto once; they can still pick manually.
+if (!settings.autoMigrated) { settings.quality = 'auto'; settings.autoMigrated = true; saveSettings(); }
 
 // ---------------------------------------------------------------- rendering
 const canvas = $('#c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+// No antialiasing on the screen buffer itself: the post-processing target already does MSAA,
+// so this only doubled the memory and fill cost of every frame (very noticeable on Retina).
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -48,22 +53,35 @@ loaders.hdr.load('assets/env/stadium_2k.hdr', (tex) => {
   scene.environmentIntensity = 0.8;
 }, undefined, () => console.warn('Sky failed to load; using a plain backdrop.'));
 
+// Graphics tiers. "Auto" starts on medium, measures the framerate while you play and moves
+// between these tiers until the game runs smoothly on whatever device it's on.
+const TIERS = {
+  high:   { dpr: 1.5,  shadow: 2048, soft: true,  msaa: 4, bloom: true  },
+  medium: { dpr: 1.0,  shadow: 1024, soft: false, msaa: 2, bloom: true  },
+  low:    { dpr: 0.85, shadow: 0,    soft: false, msaa: 0, bloom: false },
+  lowest: { dpr: 0.65, shadow: 0,    soft: false, msaa: 0, bloom: false },
+};
+const AUTO_ORDER = ['high', 'medium', 'low', 'lowest'];
+const tierName = () => settings.quality === 'auto' ? AUTO_ORDER[clampLevel(settings.autoLevel)] : settings.quality;
+const clampLevel = (l) => Math.max(0, Math.min(AUTO_ORDER.length - 1, l | 0));
+
 let composer = null, bloom = null;
 function applyQuality() {
-  const q = settings.quality;
-  const ratio = Math.min(window.devicePixelRatio || 1, q === 'high' ? 1.75 : q === 'medium' ? 1.25 : 1) * (q === 'low' ? 0.8 : 1);
-  renderer.setPixelRatio(ratio);
+  const T = TIERS[tierName()] || TIERS.medium;
+  const dev = window.devicePixelRatio || 1;
+  renderer.setPixelRatio(T.dpr >= 1 ? Math.min(dev, T.dpr) : Math.min(dev, 1) * T.dpr);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
-  renderer.shadowMap.enabled = q !== 'low';
-  sun.castShadow = q !== 'low';
-  sun.shadow.mapSize.setScalar(q === 'high' ? 4096 : 2048);
+  renderer.shadowMap.enabled = T.shadow > 0;
+  renderer.shadowMap.type = T.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  sun.castShadow = T.shadow > 0;
+  if (T.shadow) sun.shadow.mapSize.setScalar(T.shadow);
   sun.shadow.map?.dispose(); sun.shadow.map = null;
   scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
   composer?.dispose();
   composer = null;
-  if (q !== 'low') {
+  if (T.bloom) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-    const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: q === 'high' ? 4 : 2 });
+    const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: T.msaa });
     composer = new EffectComposer(renderer, target);
     composer.addPass(new RenderPass(scene, rigs[0].cam));
     bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.38, 0.6, 1.0);
@@ -768,9 +786,37 @@ function onResize() {
 const v2size = new THREE.Vector2();
 window.addEventListener('resize', onResize);
 
+// Auto quality: measure the framerate during matches and step the graphics tier down when the
+// device can't keep up (or back up when it has plenty of headroom).
+const perf = { t: 0, n: 0, since: 0, good: 0, fails: [0, 0, 0, 0] };
+function autoQuality(dt, active) {
+  if (settings.quality !== 'auto' || !active || document.hidden || dt > 0.25) return;
+  perf.since += dt;
+  if (perf.since < 1) return;                 // skip the hitch right after a tier change
+  perf.t += dt; perf.n++;
+  if (perf.t < (perf.since < 5 ? 1.5 : 3)) return;
+  const fps = perf.n / perf.t;
+  perf.t = perf.n = 0;
+  const lvl = clampLevel(settings.autoLevel);
+  let next = lvl;
+  if (fps < 50 && lvl < AUTO_ORDER.length - 1) { perf.fails[lvl]++; next = lvl + 1; }
+  else if (fps >= 57) {
+    perf.good += 3;
+    if (perf.good >= 15 && lvl > 0 && perf.fails[lvl - 1] < 2) next = lvl - 1;
+  } else perf.good = 0;
+  if (next !== lvl) {
+    settings.autoLevel = next; saveSettings();   // remembered, so the next visit starts there
+    applyQuality(); onResize();
+    perf.since = 0; perf.good = 0;
+  }
+}
+
 let last = performance.now(), acc = 0, fpsT = 0, fpsN = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  // Auto mode caps drawing at 60fps: on 120Hz MacBook screens the game was rendering every
+  // frame twice as often for no gameplay benefit (physics runs on its own fixed tick).
+  if (settings.quality === 'auto' && now - last < 1000 / 60 - 2) return;
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   const running = !(G.paused && G.mode !== 'online') && !G.garage && G.state !== 'idle';
@@ -848,6 +894,7 @@ function frame(now) {
     if (composer) composer.render(dt); else renderer.render(scene, rigs[0].cam);
   }
 
+  autoQuality(dt, G.playing && running);
   fpsN++; fpsT += dt;
   if (fpsT >= 1) { $('#fpsNote').textContent = Math.round(fpsN / fpsT) + ' fps' + (G.mode === 'online' && online.active ? ` · ${Math.round(online.rtt)} ms` : ''); fpsN = 0; fpsT = 0; }
 }
