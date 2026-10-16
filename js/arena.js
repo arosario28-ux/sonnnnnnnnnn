@@ -431,9 +431,11 @@ export function buildArena(scene, loaders) {
     const [x1, z1] = ringVertex(k - 1, -4500), [x2, z2] = ringVertex(k, -4500);
     towers.push([(x1 + x2) / 2, (z1 + z2) / 2]);
   }
+  // one shared material, so the lighting presets can dim them (they were blinding at full)
+  const flareMat = new THREE.SpriteMaterial({ map: GLOW.tex, color: 0xfff4dd, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.3 });
   for (const [x, z] of towers) {
-    const flare = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW.tex, color: 0xfff4dd, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.9 }));
-    flare.scale.setScalar(2600);
+    const flare = new THREE.Sprite(flareMat);
+    flare.scale.setScalar(1700);
     flare.position.set(x * 0.985, 5450, z * 0.985);
     group.add(flare);
   }
@@ -453,6 +455,7 @@ export function buildArena(scene, loaders) {
   let t = 0;
   return {
     group,
+    setFlare(opacity) { flareMat.opacity = opacity; },
     // `timers` are the seconds until each pad is back (0 = ready)
     update(dt, timers) {
       t += dt;

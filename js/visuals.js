@@ -205,6 +205,8 @@ export class BallView {
       this.mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_R, 4), new THREE.MeshStandardMaterial({ color: 0xe8ecf2, roughness: 0.35, metalness: 0.1, flatShading: true }));
     }
     this.mesh.castShadow = true;
+    // a thin dark outline, so the ball stays easy to see against a bright sky or floodlight
+    this.mesh.add(new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_R * 1.06, 3), new THREE.MeshBasicMaterial({ color: 0x0a0e16, side: THREE.BackSide })));
     scene.add(this.mesh);
 
     // where it will land: a ring on the ground under the ball

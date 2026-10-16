@@ -18,7 +18,7 @@ const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'rocketrush_settings_v2';
-const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'auto', sound: 'on', name: '', autoLevel: 1 };
+const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'auto', lighting: 'day', sound: 'on', name: '', autoLevel: 1 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (e) { /* defaults */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 // Graphics used to default to High, which laptops and Macs can't run smoothly. Move everyone
@@ -49,45 +49,84 @@ loaders.hdr.load('assets/env/stadium_2k.hdr', (tex) => {
   tex.mapping = THREE.EquirectangularReflectionMapping;
   scene.background = tex;
   scene.environment = tex;
-  scene.backgroundIntensity = 0.85;
-  scene.environmentIntensity = 0.8;
+  applyLighting();
 }, undefined, () => console.warn('Sky failed to load; using a plain backdrop.'));
 
-// Graphics tiers. "Auto" starts on medium, measures the framerate while you play and moves
-// between these tiers until the game runs smoothly on whatever device it's on.
+// Lighting presets (Settings > Lighting). "Day" is the stadium sky, toned down so looking up at
+// the ball isn't blinding; "Night" is a dark sky with the pitch lit by the floodlights.
+const LIGHTING = {
+  day:   { bg: 0.5, env: 0.75, hemi: 0.55, sky: 0xdfeaff, sun: 2.4, sunColor: 0xfff3df, flare: 0.3,  bloom: 0.26 },
+  night: { bg: 0.1, env: 0.42, hemi: 0.4,  sky: 0xa8bce6, sun: 1.9, sunColor: 0xe8efff, flare: 0.65, bloom: 0.34 },
+};
+function applyLighting() {
+  const L = LIGHTING[settings.lighting] || LIGHTING.day;
+  scene.backgroundIntensity = L.bg; scene.environmentIntensity = L.env;
+  hemi.intensity = L.hemi; hemi.color.setHex(L.sky);
+  sun.intensity = L.sun; sun.color.setHex(L.sunColor);
+  arena?.setFlare(L.flare);
+  if (bloom) bloom.strength = L.bloom;
+}
+
+// Graphics. The manual tiers can change anything. "Auto" steps between AUTO_LEVELS while you
+// play, and only changes things that are cheap to change on the fly (resolution, shadow detail,
+// glow on/off). It used to switch shadows and the post-processing chain too, which made the
+// browser rebuild every shader: the game froze for up to a second on a black screen.
 const TIERS = {
   high:   { dpr: 1.5,  shadow: 2048, soft: true,  msaa: 4, bloom: true  },
   medium: { dpr: 1.0,  shadow: 1024, soft: false, msaa: 2, bloom: true  },
   low:    { dpr: 0.85, shadow: 0,    soft: false, msaa: 0, bloom: false },
-  lowest: { dpr: 0.65, shadow: 0,    soft: false, msaa: 0, bloom: false },
 };
-const AUTO_ORDER = ['high', 'medium', 'low', 'lowest'];
-const tierName = () => settings.quality === 'auto' ? AUTO_ORDER[clampLevel(settings.autoLevel)] : settings.quality;
-const clampLevel = (l) => Math.max(0, Math.min(AUTO_ORDER.length - 1, l | 0));
+const AUTO_LEVELS = [
+  { dpr: 1.5,  shadow: 2048, bloom: true  },
+  { dpr: 1.0,  shadow: 1024, bloom: true  },
+  { dpr: 0.8,  shadow: 1024, bloom: false },
+  { dpr: 0.65, shadow: 512,  bloom: false },
+];
+const clampLevel = (l) => Math.max(0, Math.min(AUTO_LEVELS.length - 1, l | 0));
+const isAuto = () => settings.quality === 'auto';
 
 let composer = null, bloom = null;
-function applyQuality() {
-  const T = TIERS[tierName()] || TIERS.medium;
+function setResolution(dpr) {
   const dev = window.devicePixelRatio || 1;
-  renderer.setPixelRatio(T.dpr >= 1 ? Math.min(dev, T.dpr) : Math.min(dev, 1) * T.dpr);
+  renderer.setPixelRatio(dpr >= 1 ? Math.min(dev, dpr) : Math.min(dev, 1) * dpr);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
+}
+function setShadowSize(size) {
+  if (sun.shadow.mapSize.x === size) return;
+  sun.shadow.mapSize.setScalar(size);
+  sun.shadow.map?.dispose(); sun.shadow.map = null;   // re-made at the new size; no shader rebuild
+}
+// Full rebuild: on start, and when you pick a graphics setting by hand.
+function applyQuality() {
+  const T = isAuto() ? { soft: false, msaa: 2, shadow: 1, bloom: true } : (TIERS[settings.quality] || TIERS.medium);
   renderer.shadowMap.enabled = T.shadow > 0;
   renderer.shadowMap.type = T.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   sun.castShadow = T.shadow > 0;
-  if (T.shadow) sun.shadow.mapSize.setScalar(T.shadow);
   sun.shadow.map?.dispose(); sun.shadow.map = null;
   scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
   composer?.dispose();
-  composer = null;
+  composer = null; bloom = null;
+  setResolution(isAuto() ? AUTO_LEVELS[clampLevel(settings.autoLevel)].dpr : T.dpr);
   if (T.bloom) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: T.msaa });
     composer = new EffectComposer(renderer, target);
     composer.addPass(new RenderPass(scene, rigs[0].cam));
-    bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.38, 0.6, 1.0);
+    bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.26, 0.6, 1.0);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
   }
+  if (isAuto()) applyAutoLevel(); else if (T.shadow) setShadowSize(T.shadow);
+  applyLighting();
+}
+// Cheap switch between Auto levels, done at the start of a frame (before anything is drawn).
+function applyAutoLevel() {
+  const A = AUTO_LEVELS[clampLevel(settings.autoLevel)];
+  setResolution(A.dpr);
+  const size = renderer.getDrawingBufferSize(v2size);
+  composer?.setSize(size.x, size.y);
+  setShadowSize(A.shadow);
+  if (bloom) bloom.enabled = A.bloom;
 }
 
 // ---------------------------------------------------------------- cameras
@@ -707,6 +746,7 @@ function wireMenus() {
       saveSettings(); mark();
       if (key === 'sound') Sound.setEnabled(settings.sound === 'on');
       if (key === 'quality') applyQuality();
+      if (key === 'lighting') applyLighting();
       Sound.click();
     }));
   });
@@ -788,28 +828,31 @@ window.addEventListener('resize', onResize);
 
 // Auto quality: measure the framerate during matches and step the graphics tier down when the
 // device can't keep up (or back up when it has plenty of headroom).
-const perf = { t: 0, n: 0, since: 0, good: 0, fails: [0, 0, 0, 0] };
+// It reacts to the framerate staying low, not to one-off hitches, and never goes back up to a
+// level that already struggled, so it settles instead of flipping back and forth.
+const perf = { t: 0, n: 0, since: 0, good: 0, failed: [false, false, false, false] };
 function autoQuality(dt, active) {
-  if (settings.quality !== 'auto' || !active || document.hidden || dt > 0.25) return;
+  if (!isAuto() || !active || document.hidden) return;
   perf.since += dt;
-  if (perf.since < 1) return;                 // skip the hitch right after a tier change
+  if (perf.since < 2 || dt > 0.1) return;     // settle after a change; ignore single hitches
   perf.t += dt; perf.n++;
-  if (perf.t < (perf.since < 5 ? 1.5 : 3)) return;
+  if (perf.t < 3) return;
   const fps = perf.n / perf.t;
   perf.t = perf.n = 0;
   const lvl = clampLevel(settings.autoLevel);
   let next = lvl;
-  if (fps < 50 && lvl < AUTO_ORDER.length - 1) { perf.fails[lvl]++; next = lvl + 1; }
-  else if (fps >= 57) {
+  if (fps < 48 && lvl < AUTO_LEVELS.length - 1) { perf.failed[lvl] = true; next = lvl + 1; }
+  else if (fps >= 58) {
     perf.good += 3;
-    if (perf.good >= 15 && lvl > 0 && perf.fails[lvl - 1] < 2) next = lvl - 1;
+    if (perf.good >= 20 && lvl > 0 && !perf.failed[lvl - 1]) next = lvl - 1;
   } else perf.good = 0;
   if (next !== lvl) {
     settings.autoLevel = next; saveSettings();   // remembered, so the next visit starts there
-    applyQuality(); onResize();
+    pendingAutoLevel = true;                      // applied at the start of the next frame
     perf.since = 0; perf.good = 0;
   }
 }
+let pendingAutoLevel = false;
 
 let last = performance.now(), acc = 0, fpsT = 0, fpsN = 0;
 function frame(now) {
@@ -817,6 +860,8 @@ function frame(now) {
   // Auto mode caps drawing at 60fps: on 120Hz MacBook screens the game was rendering every
   // frame twice as often for no gameplay benefit (physics runs on its own fixed tick).
   if (settings.quality === 'auto' && now - last < 1000 / 60 - 2) return;
+  // a resize clears the screen, so only change resolution right before drawing a new frame
+  if (pendingAutoLevel) { pendingAutoLevel = false; applyAutoLevel(); }
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   const running = !(G.paused && G.mode !== 'online') && !G.garage && G.state !== 'idle';
@@ -919,6 +964,11 @@ async function start() {
   garageCar.pos.y = CAR.REST;
   applyQuality();
   setupMatch('attract');
+  // Build every shader before play starts, including the goal/demo effects that only appear
+  // later, so the first goal or explosion doesn't freeze the game while they compile.
+  fx.shock(new THREE.Vector3(0, -3000, 0), 0xffffff, 1, 0.05);
+  fx.shock(new THREE.Vector3(0, -3000, 0), 0xffffff, 1, 0.05, true);
+  try { await renderer.compileAsync(scene, rigs[0].cam); } catch (e) { renderer.compile(scene, rigs[0].cam); }
   showOnly('#menuMain');
   requestAnimationFrame(frame);
   // development helpers: ?auto=single|two|free starts a match straight away, ?bot=1 lets a
