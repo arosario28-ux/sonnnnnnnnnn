@@ -18,7 +18,7 @@ const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
 // ---------------------------------------------------------------- settings
 const SETTINGS_KEY = 'rocketrush_settings_v2';
-const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'auto', lighting: 'day', sound: 'on', name: '', autoLevel: 1 };
+const settings = { difficulty: 'medium', teamSize: '1', minutes: '3', quality: 'auto', lighting: 'day', sound: 'on', name: '', autoLevel: 1, onlineSize: '1' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (e) { /* defaults */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 // Graphics used to default to High, which laptops and Macs can't run smoothly. Move everyone
@@ -319,12 +319,25 @@ function setupMatch(mode) {
   } else if (mode === 'free') {
     G.locals = [addCar(0, 0, null, look, null)];
   } else if (mode === 'online') {
-    const mine = online.host ? 0 : 1;
-    const a = addCar(0, 0, mine === 0 ? null : online.opponent.name, mine === 0 ? look : online.opponent.look, null);
-    const b = addCar(1, 0, mine === 1 ? null : online.opponent.name, mine === 1 ? look : online.opponent.look, null);
-    G.locals = [mine === 0 ? a : b];
-    (mine === 0 ? b : a).kinematic = true;
-    G.names = mine === 0 ? [myName, online.opponent.name] : [online.opponent.name, myName];
+    // every seat from the host's start call: real players, then bots in any empty seats. The
+    // host runs the bots; everyone else draws them from the host's packets.
+    const call = online.call;
+    const seats = [
+      ...call.players.map((p) => ({ ...p, human: true })),
+      // bot names come from the match id, so every player sees the same ones
+      ...call.bots.map((b, i) => ({ ...b, human: false, name: BOT_NAMES[(call.match.charCodeAt(0) + i) % BOT_NAMES.length] })),
+    ].sort((a, b) => a.team - b.team || a.slot - b.slot);
+    for (const st of seats) {
+      const mine = st.human && st.id === online.me;
+      const car = addCar(st.team, st.slot, mine ? null : st.name, mine ? look : st.human ? st.look : null, !st.human && online.host ? 'medium' : null);
+      car.ownerId = st.human ? st.id : null;
+      car.isBot = !st.human;
+      if (mine) G.locals = [car];
+      else if (st.human || !online.host) car.kinematic = true;
+    }
+    G.names = call.size === 1
+      ? [0, 1].map((t) => { const st = seats.find((x) => x.team === t); return st.human && st.id === online.me ? myName : st.name; })
+      : [...TEAM_NAMES];
   }
   rigs[0].ballCam = rigs[1].ballCam = true;
   for (const r of rigs) { r.shake = 0; r.up.set(0, 1, 0); r.cam.up.set(0, 1, 0); }
@@ -360,7 +373,16 @@ function scoreGoal(team, scorerLook) {
   G.score[team]++;
   startGoal(team, G.ball.pos, scorerLook);
   online.goalSeq++;
-  online.lastGoal = { n: online.goalSeq, t: team, p: [Math.round(G.ball.pos.x), Math.round(G.ball.pos.y), Math.round(G.ball.pos.z)] };
+  online.lastGoal = { n: online.goalSeq, t: team, c: scorerLook || 'cel_classic', p: [Math.round(G.ball.pos.x), Math.round(G.ball.pos.y), Math.round(G.ball.pos.z)] };
+}
+
+// Online: the goal celebration of the player who last touched the ball, if they're on the
+// scoring team (bots and own goals get the classic one).
+function scorerCelebration(team) {
+  const t = G.lastTouch;
+  if (!t || t.team !== team || t.isBot) return 'cel_classic';
+  if (G.locals.includes(t)) return currentLook().celebration;
+  return online.cels[t.ownerId] || 'cel_classic';
 }
 
 // The show after a goal: explosion, cars thrown clear, the scoreline.
@@ -415,45 +437,53 @@ function finishMatch() {
 }
 
 // ---------------------------------------------------------------- online sync
-// The host (blue) owns the clock, score, goals and the ball. The guest (orange) simulates the
-// ball too, so its own touches feel instant, reports those touches to the host, and otherwise
-// eases its ball toward the host's. Each side owns its own car; the other car is drawn from
-// packets, carried forward by its velocity so it glides between them.
-const SEND_MS = 66;
+// The host owns the clock, score, goals, the ball and the bots. Every player owns their own car
+// and broadcasts it; everyone else draws it from those packets, carried forward by its velocity
+// so it glides between them. Guests simulate the ball too, so their own touches feel instant,
+// report those touches to the host, and otherwise ease their ball toward the host's.
+const SEND_MS = 66, SEND_MS_TEAMS = 90;   // a bit less often in 2v2/3v3, to stay inside Realtime's limits
 const online = {
-  session: null, active: false, host: false, opponent: null,
+  active: false, host: false, me: null, hostId: null, size: 1, call: null,
   kickSeq: 0, goalSeq: 0, lastGoal: null,
-  lastSend: 0, seq: 0, remote: null, remoteAt: 0, rtt: 120, theirTs: 0, theirTsAt: 0,
-  hitSeq: 0, hitAt: 0, hitBall: null, hitAck: 0, seenHit: 0,
+  lastSend: 0, seq: 0, rtt: 120, hostTs: 0, hostTsAt: 0,
+  echoes: {}, rtts: {}, lastN: {}, cels: {},
+  hitSeq: 0, hitAt: 0, hitBall: null, hitAck: 0, seenHits: {},
   seenKick: -1, seenGoal: 0, netBall: new Ball(), haveNetBall: false,
-  picks: [], pickSeq: 0, seenPick: 0,
+  picks: [], pickSeq: 0, seenPicks: {},
 };
 const r1 = (v) => Math.round(v * 10) / 10, r3 = (v) => Math.round(v * 1000) / 1000;
 const packBall = (b) => [r1(b.pos.x), r1(b.pos.y), r1(b.pos.z), r1(b.vel.x), r1(b.vel.y), r1(b.vel.z), r3(b.ang.x), r3(b.ang.y), r3(b.ang.z)];
 function unpackBall(a, b) { b.pos.set(a[0], a[1], a[2]); b.vel.set(a[3], a[4], a[5]); b.ang.set(a[6], a[7], a[8]); }
+const packCar = (car, q = car.quat) => [r1(car.pos.x), r1(car.pos.y), r1(car.pos.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w), r1(car.vel.x), r1(car.vel.y), r1(car.vel.z), r3(car.ang.x), r3(car.ang.y), r3(car.ang.z),
+  Math.round(car.boost), (car.boosting ? 1 : 0) | (car.onGround ? 2 : 0) | (car.supersonic ? 4 : 0) | (car.demoed ? 8 : 0), r3(car.steerAngle)];
 
 function resetOnline() {
-  Object.assign(online, { kickSeq: 0, goalSeq: 0, lastGoal: null, lastSend: 0, seq: 0, remote: null, rtt: 120, theirTs: 0, hitSeq: 0, hitAck: 0, seenHit: 0, hitBall: null, seenKick: -1, seenGoal: 0, haveNetBall: false, picks: [], pickSeq: 0, seenPick: 0 });
+  Object.assign(online, {
+    kickSeq: 0, goalSeq: 0, lastGoal: null, lastSend: 0, seq: 0, rtt: 120, hostTs: 0, hostTsAt: 0,
+    echoes: {}, rtts: {}, lastN: {}, cels: {}, hitSeq: 0, hitAck: 0, seenHits: {}, hitBall: null,
+    seenKick: -1, seenGoal: 0, haveNetBall: false, picks: [], pickSeq: 0, seenPicks: {},
+  });
 }
 
 function netSend(now) {
-  if (now - online.lastSend < SEND_MS) return;
+  if (now - online.lastSend < (online.size > 1 ? SEND_MS_TEAMS : SEND_MS)) return;
   online.lastSend = now;
-  const car = G.locals[0], q = car.quat;
-  const p = {
-    n: ++online.seq, ts: Math.round(now), e: [online.theirTs, Math.round(now - online.theirTsAt)],
-    c: [r1(car.pos.x), r1(car.pos.y), r1(car.pos.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w), r1(car.vel.x), r1(car.vel.y), r1(car.vel.z), r3(car.ang.x), r3(car.ang.y), r3(car.ang.z),
-      Math.round(car.boost), (car.boosting ? 1 : 0) | (car.onGround ? 2 : 0) | (car.supersonic ? 4 : 0) | (car.demoed ? 8 : 0), r3(car.steerAngle)],
-  };
+  const p = { n: ++online.seq, ts: Math.round(now), c: packCar(G.locals[0]) };
   online.picks = online.picks.filter((k) => now - k.at < 700);
   if (online.picks.length) p.pk = online.picks.map((k) => [k.i, k.n]);
   if (online.host) {
     p.b = packBall(G.ball);
     p.st = [G.state, G.score[0], G.score[1], Math.round(G.timeLeft * 10) / 10, r1(G.countdown), G.overtime ? 1 : 0, G.ballHidden ? 1 : 0];
     p.k = [online.kickSeq, G.kickoffSpot];
-    if (online.lastGoal) p.g = { ...online.lastGoal, c: currentLook().celebration };
-    p.ha = online.seenHit;
+    if (online.lastGoal) p.g = online.lastGoal;
+    p.ha = online.seenHits;
+    p.e = {};   // each guest's last timestamp, echoed back so they can measure their ping
+    for (const id in online.echoes) p.e[id] = [online.echoes[id][0], Math.round(now - online.echoes[id][1])];
+    const bots = [];
+    G.cars.forEach((car, i) => { if (car.isBot && !car.kinematic) bots.push([i, ...packCar(car)]); });
+    if (bots.length) p.bc = bots;
   } else {
+    p.e = [online.hostTs, Math.round(now - online.hostTsAt)];
     if (online.hitBall && now - online.hitAt < 400) p.h = { n: online.hitSeq, b: online.hitBall };
     p.cel = currentLook().celebration;
   }
@@ -462,28 +492,50 @@ function netSend(now) {
 
 function netReceive(p) {
   if (!online.active || G.mode !== 'online') return;
-  const now = performance.now();
-  if (online.remote && p.n <= online.remote.n) return;   // out of order
-  online.remote = p; online.remoteAt = now;
-  online.theirTs = p.ts; online.theirTsAt = now;
-  if (p.e && p.e[0]) online.rtt += (clamp(now - p.e[0] - p.e[1], 0, 600) - online.rtt) * 0.15;
-  const lag = Math.min(0.2, online.rtt / 2000);
+  const now = performance.now(), from = p.f;
+  if (p.n <= (online.lastN[from] || 0)) return;   // out of order
+  online.lastN[from] = p.n;
 
-  if (p.pk) for (const [i, n] of p.pk) if (n > online.seenPick) { online.seenPick = n; G.pads[i] = PADS[i][2] ? PAD_BIG_TIME : PAD_SMALL_TIME; }
+  // their car
+  const car = G.cars.find((c) => c.ownerId === from);
+  if (car?.kinematic) { car.net = p.c; car.netAt = now; }
+
+  if (p.pk) {
+    let seen = online.seenPicks[from] || 0;
+    for (const [i, n] of p.pk) if (n > seen) { seen = n; G.pads[i] = PADS[i][2] ? PAD_BIG_TIME : PAD_SMALL_TIME; }
+    online.seenPicks[from] = seen;
+  }
 
   if (online.host) {
-    online.guestCel = p.cel;
-    if (p.h && p.h.n > online.seenHit && G.state === 'play') {
-      // the guest touched the ball: take their result, carried forward to now
-      online.seenHit = p.h.n;
+    online.echoes[from] = [p.ts, now];
+    const was = online.rtts[from] ?? 120;
+    if (p.e && p.e[0]) online.rtts[from] = was + (clamp(now - p.e[0] - p.e[1], 0, 600) - was) * 0.15;
+    online.cels[from] = p.cel;
+    if (p.h && p.h.n > (online.seenHits[from] || 0) && G.state === 'play') {
+      // a guest touched the ball: take their result, carried forward to now
+      online.seenHits[from] = p.h.n;
       unpackBall(p.h.b, G.ball);
+      const lag = Math.min(0.2, (online.rtts[from] ?? 120) / 2000);
       for (let t = 0; t < lag; t += TICK) G.ball.step(TICK);
       G.kickoffTouched = true;
+      if (car) G.lastTouch = car;
     }
     return;
   }
 
-  // ---- guest: follow the host's match
+  // ---- guest: only the host's packets say anything about the match
+  if (from !== online.hostId) return;
+  online.hostTs = p.ts; online.hostTsAt = now;
+  const echo = p.e && p.e[online.me];
+  if (echo && echo[0]) online.rtt += (clamp(now - echo[0] - echo[1], 0, 600) - online.rtt) * 0.15;
+  const lag = Math.min(0.2, online.rtt / 2000);
+
+  if (p.bc) for (const a of p.bc) {
+    const c = G.cars[a[0]];
+    if (!c || G.locals.includes(c)) continue;
+    c.kinematic = true; c.isBot = true; c.net = a.slice(1); c.netAt = now;
+  }
+
   const [state, sb, sr, tl, cd, ot, hidden] = p.st;
   G.score[0] = sb; G.score[1] = sr; G.timeLeft = tl; G.overtime = !!ot;
   if (p.k[0] !== online.seenKick) {
@@ -494,23 +546,41 @@ function netReceive(p) {
   }
   if (p.g && p.g.n > online.seenGoal) {
     online.seenGoal = p.g.n;
-    startGoal(p.g.t, v3.set(p.g.p[0], p.g.p[1], p.g.p[2]), p.g.t === 0 ? p.g.c : currentLook().celebration);
+    startGoal(p.g.t, v3.set(p.g.p[0], p.g.p[1], p.g.p[2]), p.g.c);
   }
   if (state === 'countdown' && G.state === 'countdown') G.countdown = cd;
   if (state === 'play' && G.state !== 'play' && (G.state !== 'goal' || !hidden)) { G.state = 'play'; G.ballHidden = false; }
   if (state === 'over' && G.state !== 'over') finishMatch();
-  online.hitAck = p.ha || 0;
+  online.hitAck = (p.ha && p.ha[online.me]) || 0;
   unpackBall(p.b, online.netBall);
   for (let t = 0; t < lag; t += TICK) online.netBall.step(TICK);
   online.haveNetBall = true;
 }
 
-// Moves the other player's car to where its last packet says it should be by now.
+// A player left mid-match. If it was the host, the match is over (the host runs it). Otherwise
+// the host hands their car to a bot, and everyone sees it driven from the host's packets.
+function playerLeft({ id, wasHost }) {
+  if (G.mode !== 'online' || G.state === 'over') return;
+  const car = G.cars.find((c) => c.ownerId === id);
+  if (wasHost) {
+    lobby.leave(); online.active = false;
+    setupMatch('attract'); updateHudLayout();
+    showNotice('Host left', 'The player hosting the match disconnected, so the match has ended.');
+    return;
+  }
+  if (!car) return;
+  car.ownerId = null; car.isBot = true;
+  if (online.host) { car.kinematic = false; car.net = null; G.bots.push(new Bot(car, 'medium')); }
+  if (G.playing) { showSub('A player left: a bot took their place'); setTimeout(() => { if (G.state === 'play') showSub(''); }, 3000); }
+}
+
+// Moves another player's car (or, for guests, a bot) to where its last packet says it should be by now.
 const rq = new THREE.Quaternion();
 function driveRemote(car, dt) {
-  const p = online.remote;
-  if (!p) return;
-  const c = p.c, age = Math.min(0.25, (performance.now() - online.remoteAt) / 1000 + online.rtt / 2000);
+  const c = car.net;
+  if (!c) return;
+  const rtt = online.host ? (online.rtts[car.ownerId] ?? 120) : online.rtt;
+  const age = Math.min(0.25, (performance.now() - car.netAt) / 1000 + rtt / 2000);
   const wasDemoed = car.demoed;
   car.demoed = !!(c[14] & 8);
   if (car.demoed && !wasDemoed) { demoExplosion(fx, car.pos, car.team); Sound.demo(); }
@@ -590,7 +660,7 @@ function tick(dt) {
     }
     if (!guest && G.state === 'play') {
       const scored = isGoal(ball);
-      if (scored >= 0) scoreGoal(scored, G.mode === 'online' ? (scored === 0 ? currentLook().celebration : online.guestCel) : null);
+      if (scored >= 0) scoreGoal(scored, G.mode === 'online' ? scorerCelebration(scored) : null);
     }
   }
 
@@ -601,7 +671,9 @@ function tick(dt) {
       collectPads(car, G.pads, (i, big, c) => {
         fx.burst(v1.set(PADS[i][0], big ? 90 : 20, PADS[i][1]), big ? 70 : 20, big ? 800 : 380, 0.55, big ? 40 : 26, PAD_SPARK, -250, 150);
         if (big) fx.shock(v1, PAD_SPARK, 320, 0.35);
-        if (G.locals.includes(c)) { Sound.pad(big); if (G.mode === 'online') online.picks.push({ i, n: ++online.pickSeq, at: performance.now() }); }
+        if (G.locals.includes(c)) Sound.pad(big);
+        // tell everyone about our own pickups, and (host) the bots'
+        if (G.mode === 'online' && (G.locals.includes(c) || (online.host && c.isBot))) online.picks.push({ i, n: ++online.pickSeq, at: performance.now() });
       });
     }
   }
@@ -732,6 +804,7 @@ function wireMenus() {
   click('#btnMainMenu', goToMenu);
   click('#noticeOk', goToMenu);
   click('#btnRematch', () => { if (G.mode === 'online') { goToMenu(); startOnline('quick'); } else setupMatch(G.mode); });
+  click('#btnStartBots', () => lobby?.startNow());
   click('#btnGarage', () => { G.garage = true; showOnly('#menuGarage'); renderGarage(); garageView.setLook(currentLook()); });
   click('#closeGarage', () => { G.garage = false; showOnly('#menuMain'); });
   click('#btnOpenDrop', openDrop);
@@ -784,6 +857,7 @@ function startOnline(kind, code) {
       $('#roomCode').textContent = room.code || '';
       $('#roomCode').classList.toggle('hidden', !room.code);
       $('#lobbyStatus').textContent = room.status;
+      $('#btnStartBots').classList.toggle('hidden', !room.canStart);
       $('#lobbyPlayers').innerHTML = '';
       for (const p of room.players) {
         const el = document.createElement('span');
@@ -793,24 +867,21 @@ function startOnline(kind, code) {
       }
     },
     onError(text) { lobby.leave(); online.active = false; showNotice('Online', text); },
-    onStart({ host, opponent }) {
+    onStart({ host, me, call }) {
       resetOnline();
-      online.active = true; online.host = host; online.opponent = { name: opponent.name || 'Opponent', look: opponent.look || null };
+      Object.assign(online, { active: true, host, me, hostId: call.host, size: call.size, call });
       setupMatch('online');
     },
     onPacket: netReceive,
-    onPeerLeft() {
-      if (G.mode !== 'online' || G.state === 'over') return;
-      lobby.leave(); online.active = false;
-      setupMatch('attract'); updateHudLayout();
-      showNotice('Opponent left', 'The other player disconnected. The match has ended.');
-    },
+    onPeerLeft: playerLeft,
   });
 
   showOnly('#menuLobby');
   $('#roomCode').classList.add('hidden'); $('#lobbyPlayers').innerHTML = ''; $('#lobbyStatus').textContent = 'Connecting…';
-  if (kind === 'quick') lobby.quick({ name, look });
-  else if (kind === 'create') lobby.create({ name, look });
+  $('#btnStartBots').classList.add('hidden');
+  const size = Number(settings.onlineSize) || 1;
+  if (kind === 'quick') lobby.quick({ name, look }, size);
+  else if (kind === 'create') lobby.create({ name, look }, size);
   else lobby.join(code, { name, look });
 }
 
