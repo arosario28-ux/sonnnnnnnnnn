@@ -10,7 +10,8 @@ export const TICK = 1 / 120;
 export const F = {
   HX: 4096, HZ: 5120, H: 2044,       // half width, half length, ceiling height
   CORNER: 1152,                      // the 45 degree corner walls cut this far in
-  RB: 256, RT: 384,                  // radius of the curve where walls meet floor / ceiling
+  RB: 512, RT: 384,                  // radius of the curve where walls meet floor / ceiling
+                                     // (RB was 256: a bigger radius = a gentler ramp up the walls)
   GW: 892.755, GH: 642.775, GD: 880, // goal half width, height, depth
 };
 const CORNER_SUM = F.HX + F.HZ - F.CORNER;
@@ -61,7 +62,7 @@ export function arenaDist(p, n) {
   const ax = Math.abs(p.x), az = Math.abs(p.z), y = p.y;
   const sx = p.x < 0 ? -1 : 1, sz = p.z < 0 ? -1 : 1;
 
-  if (ax <= F.GW && y <= F.GH && az > F.HZ - 400) {
+  if (ax <= F.GW && y <= F.GH && az > F.HZ - Math.max(400, F.RB + 150)) {
     // In or in front of a goal mouth: the back wall has a hole here. The nearest surfaces are
     // the floor, the goal's side walls and roof (or their front edges, the posts and crossbar,
     // while still out on the field) and the back of the net.
@@ -262,7 +263,7 @@ export class Car {
     this.groundGrace -= dt;
     const wasGround = this.onGround;
     let grounded = down >= 2 && this.groundGrace <= 0;
-    if (grounded) { t1.normalize(); grounded = t1.dot(up) > 0.65; }
+    if (grounded) { t1.normalize(); grounded = t1.dot(up) > 0.55; }   // a bit more forgiving when landing at an angle
     this.wheelsDown = down;
     this.onGround = grounded;
     const jumpPressed = inp.jump && !this.prevJump;
@@ -375,6 +376,26 @@ export class Car {
         ang.addScaledVector(fwd, (r * 36.08 - wr * 4.472) * dt);
         const spin = ang.length();
         if (spin > CAR.MAX_SPIN) ang.multiplyScalar(CAR.MAX_SPIN / spin);
+      }
+
+      // Wall landing assist: when the car is in the air, close to a wall (or the ramp at its foot)
+      // and heading into it, it turns its wheels toward that surface. Jumping or flipping into a
+      // wall then lands on the wheels and keeps driving, instead of bouncing off the roof.
+      if (!stuck) {
+        const d = arenaDist(pos, tn);
+        const toward = -vel.dot(tn);
+        if (d < 320 && toward > 150 && tn.y < 0.9 && tn.y > -0.3) {
+          if (this.dodgeTime >= 0 && d < 160) { this.dodgeTime = -1; ang.set(0, 0, 0); }   // finish the flip early so it can land
+          if (this.dodgeTime < 0) {
+            tq.setFromUnitVectors(up, tn);
+            const k = 1 - Math.exp(-Math.max(5, 3 * toward / Math.max(d, 30)) * dt);
+            t2.set(tq.x * k, tq.y * k, tq.z * k);
+            tq.set(t2.x, t2.y, t2.z, 1 - k + tq.w * k).normalize();
+            quat.premultiply(tq).normalize();
+            ang.multiplyScalar(Math.exp(-6 * dt));
+            this.updateAxes();
+          }
+        }
       }
 
       if (stuck) {
